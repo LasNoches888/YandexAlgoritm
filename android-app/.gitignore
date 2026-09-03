@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+local.properties
+build_log.txt
+lint_log.txt
+test_log.txt
+.cxx/
+captures/
+*.apk
