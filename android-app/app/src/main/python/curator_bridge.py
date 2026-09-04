@@ -77,6 +77,16 @@ def _is_variant_track(track):
     return any(keyword in haystack for keyword in _VARIANT_KEYWORDS)
 
 
+def _track_to_dict(track):
+    return {
+        "id": str(track.id),
+        "albumId": str(track.albums[0].id),
+        "title": track.title,
+        "artists": [a.name for a in (track.artists or [])],
+        "coverUrl": track.get_cover_url("300x300") if track.cover_uri else None,
+    }
+
+
 def _known_artist_ids(client, liked_tracks):
     known = set()
     for track in liked_tracks:
@@ -213,15 +223,7 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
 
             per_genre_found[genre_id] = found
 
-        tracks = [
-            {
-                "id": str(track.id),
-                "albumId": str(track.albums[0].id),
-                "title": track.title,
-                "artists": [a.name for a in (track.artists or [])],
-            }
-            for track in picked
-        ]
+        tracks = [_track_to_dict(track) for track in picked]
 
         return json.dumps({"ok": True, "tracks": tracks, "perGenreFound": per_genre_found})
     except Exception as exc:  # noqa: BLE001
@@ -275,15 +277,7 @@ def pick_cheerful_tracks(token: str, count: int, max_per_artist: int) -> str:
             if len(picked) >= count:
                 break
 
-        tracks = [
-            {
-                "id": str(track.id),
-                "albumId": str(track.albums[0].id),
-                "title": track.title,
-                "artists": [a.name for a in (track.artists or [])],
-            }
-            for track in picked
-        ]
+        tracks = [_track_to_dict(track) for track in picked]
 
         return json.dumps({"ok": True, "tracks": tracks})
     except Exception as exc:  # noqa: BLE001

@@ -24,6 +24,7 @@ data class TrackInfo(
     val albumId: String,
     val title: String,
     val artists: List<String>,
+    val coverUrl: String? = null,
 ) {
     val artistsLabel: String get() = artists.joinToString(", ")
 }

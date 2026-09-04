@@ -18,6 +18,7 @@ sealed interface Screen {
     data object LoadingTaste : Screen
     data class Home(val taste: TasteResult) : Screen
     data class Working(val stage: String) : Screen
+    data class Review(val title: String, val tracks: List<TrackInfo>) : Screen
     data class Result(val playlistUrl: String, val trackCount: Int, val tracks: List<TrackInfo>) : Screen
     data class ErrorScreen(val message: String) : Screen
 }
@@ -44,7 +45,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var selectedGenreIds by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    var selectedTrackIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
     private var lastTaste: TasteResult? = null
+    private var pendingTitle: String = ""
+    private var pendingTracks: List<TrackInfo> = emptyList()
 
     init {
         if (token != null) loadTaste()
@@ -109,7 +115,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            createPlaylistAndShowResult(currentToken, playlistName, picked.tracks)
+            showReview(playlistName, picked.tracks)
         }
     }
 
@@ -133,8 +139,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            createPlaylistAndShowResult(currentToken, CHEERFUL_PLAYLIST_NAME, picked.tracks)
+            showReview(CHEERFUL_PLAYLIST_NAME, picked.tracks)
         }
+    }
+
+    private fun showReview(title: String, tracks: List<TrackInfo>) {
+        pendingTitle = title
+        pendingTracks = tracks
+        selectedTrackIds = tracks.map { it.id }.toSet()
+        screen = Screen.Review(title, tracks)
+    }
+
+    fun toggleTrackSelection(id: String) {
+        selectedTrackIds = if (id in selectedTrackIds) selectedTrackIds - id else selectedTrackIds + id
+    }
+
+    fun confirmReview() {
+        val currentToken = token ?: return
+        val chosen = pendingTracks.filter { it.id in selectedTrackIds }
+        if (chosen.isEmpty()) return
+
+        viewModelScope.launch {
+            createPlaylistAndShowResult(currentToken, pendingTitle, chosen)
+        }
+    }
+
+    fun cancelReview() {
+        pendingTracks = emptyList()
+        backToHome()
     }
 
     private suspend fun createPlaylistAndShowResult(currentToken: String, title: String, tracks: List<TrackInfo>) {

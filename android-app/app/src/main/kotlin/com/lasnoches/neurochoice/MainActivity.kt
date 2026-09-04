@@ -9,32 +9,44 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -57,12 +69,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
 import com.lasnoches.neurochoice.data.OAuthUtils
 import com.lasnoches.neurochoice.data.TasteResult
+import com.lasnoches.neurochoice.data.TrackInfo
 import com.lasnoches.neurochoice.ui.theme.NeuroChoiceTheme
 
 class MainActivity : ComponentActivity() {
@@ -99,18 +119,26 @@ private fun AppRoot(vm: AppViewModel) {
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (val screen = vm.screen) {
-                is Screen.Login -> LoginScreen(onToken = vm::onLoginSuccess)
-                is Screen.LoadingTaste -> CenteredMessage(text = "Читаю лайки и любимые жанры...", showSpinner = true)
-                is Screen.Home -> HomeScreen(vm = vm, taste = screen.taste)
-                is Screen.Working -> CenteredMessage(text = screen.stage, showSpinner = true)
-                is Screen.Result -> ResultScreen(result = screen, onRestart = vm::backToHome)
-                is Screen.ErrorScreen -> CenteredMessage(
-                    text = screen.message,
-                    showSpinner = false,
-                    actionLabel = "Повторить",
-                    onAction = vm::retryFromError,
-                )
+            AnimatedContent(
+                targetState = vm.screen,
+                label = "screen-transition",
+                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(140)) },
+            ) { screen ->
+                when (screen) {
+                    is Screen.Login -> LoginScreen(onToken = vm::onLoginSuccess)
+                    is Screen.LoadingTaste ->
+                        CenteredMessage(text = "Читаю лайки и любимые жанры...", showSpinner = true)
+                    is Screen.Home -> HomeScreen(vm = vm, taste = screen.taste)
+                    is Screen.Working -> CenteredMessage(text = screen.stage, showSpinner = true)
+                    is Screen.Review -> ReviewScreen(vm = vm, screen = screen)
+                    is Screen.Result -> ResultScreen(result = screen, onRestart = vm::backToHome)
+                    is Screen.ErrorScreen -> CenteredMessage(
+                        text = screen.message,
+                        showSpinner = false,
+                        actionLabel = "Повторить",
+                        onAction = vm::retryFromError,
+                    )
+                }
             }
         }
     }
@@ -153,6 +181,7 @@ private fun LoginScreen(onToken: (String) -> Unit) {
 @Composable
 private fun HomeScreen(vm: AppViewModel, taste: TasteResult) {
     var advancedExpanded by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
 
     Column(
         modifier = Modifier
@@ -235,7 +264,10 @@ private fun HomeScreen(vm: AppViewModel, taste: TasteResult) {
         }
 
         Button(
-            onClick = { vm.startCuration() },
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                vm.startCuration()
+            },
             enabled = vm.selectedGenreIds.isNotEmpty() && vm.playlistName.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -245,7 +277,10 @@ private fun HomeScreen(vm: AppViewModel, taste: TasteResult) {
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
         Button(
-            onClick = { vm.startCheerfulPlaylist() },
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                vm.startCheerfulPlaylist()
+            },
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.secondary,
                 contentColor = MaterialTheme.colorScheme.onSecondary,
@@ -255,6 +290,99 @@ private fun HomeScreen(vm: AppViewModel, taste: TasteResult) {
             Icon(Icons.Filled.Favorite, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("Маргарите, чтоб не грустила")
+        }
+    }
+}
+
+@Composable
+private fun TrackRow(
+    track: TrackInfo,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.fillMaxWidth().padding(vertical = 6.dp),
+    ) {
+        AsyncImage(
+            model = track.coverUrl,
+            contentDescription = null,
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(8.dp)),
+            contentScale = ContentScale.Crop,
+            error = rememberFallbackCoverPainter(),
+            placeholder = rememberFallbackCoverPainter(),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                track.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                track.artistsLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        }
+    }
+}
+
+@Composable
+private fun rememberFallbackCoverPainter() = rememberVectorPainter(Icons.Filled.MusicNote)
+
+@Composable
+private fun ReviewScreen(vm: AppViewModel, screen: Screen.Review) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            "«${screen.title}»  —  выбрано ${vm.selectedTrackIds.size} из ${screen.tracks.size}",
+            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp),
+        ) {
+            items(screen.tracks, key = { it.id }) { track ->
+                val checked = track.id in vm.selectedTrackIds
+                TrackRow(
+                    track = track,
+                    modifier = Modifier.clickable { vm.toggleTrackSelection(track.id) },
+                ) {
+                    Checkbox(checked = checked, onCheckedChange = { vm.toggleTrackSelection(track.id) })
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(onClick = { vm.cancelReview() }, modifier = Modifier.weight(1f)) {
+                Text("Отмена")
+            }
+            Button(
+                onClick = { vm.confirmReview() },
+                enabled = vm.selectedTrackIds.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(Icons.Filled.CheckCircle, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Создать (${vm.selectedTrackIds.size})")
+            }
         }
     }
 }
@@ -283,12 +411,9 @@ private fun ResultScreen(result: Screen.Result, onRestart: () -> Unit) {
             Text("Подобрать ещё раз")
         }
 
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(result.tracks) { track ->
-                Text(
-                    "${track.artistsLabel} — ${track.title}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(result.tracks, key = { it.id }) { track ->
+                TrackRow(track = track)
             }
         }
     }
