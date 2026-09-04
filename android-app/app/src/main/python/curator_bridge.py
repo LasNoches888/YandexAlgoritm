@@ -6,10 +6,11 @@
 чтобы Kotlin мог однозначно распарсить результат через kotlinx.serialization
 без работы с "сырыми" Python-объектами через Chaquopy.
 
-Логика подбора треков идентична десктопному music_curator.py:
-любимые жанры считаются по лайкам, известные исполнители (лайкнутые,
-дизлайкнутые, исполнители лайкнутых треков) исключаются из выдачи
-жанровых радиостанций Яндекса.
+Логика подбора треков идентична десктопному music_curator.py: любимые
+жанры считаются по лайкам, известные исполнители (лайкнутые, дизлайкнутые,
+исполнители лайкнутых треков) исключаются из выдачи. Кандидаты на трек
+берутся в первую очередь через "похожие на уже лайкнутое" (tracks_similar),
+жанровая радиостанция — второй источник, чтобы добрать недостающее.
 """
 import json
 from collections import Counter
@@ -89,6 +90,49 @@ def _known_artist_ids(client, liked_tracks):
     return known
 
 
+def _liked_tracks_by_genre(liked_tracks):
+    by_genre = {}
+    for track in liked_tracks:
+        genre = _track_genre(track)
+        if genre:
+            by_genre.setdefault(genre, []).append(track)
+    return by_genre
+
+
+_SIMILAR_SEED_LIMIT = 5
+
+
+def _candidate_tracks_for_genre(client, genre_id, seed_tracks):
+    """Кандидаты для жанра из двух источников: сперва похожие на уже
+    лайкнутые треки этого жанра (точный сигнал от рекомендательной системы
+    Яндекса), затем жанровая радиостанция с упором на новое как добор."""
+    candidates = []
+
+    for seed in seed_tracks[:_SIMILAR_SEED_LIMIT]:
+        try:
+            similar = client.tracks_similar(seed.id)
+        except Exception:  # noqa: BLE001 - трек без похожих, пропускаем
+            continue
+        if similar and similar.similar_tracks:
+            candidates.extend(similar.similar_tracks)
+
+    station = f"genre:{genre_id}"
+    try:
+        client.rotor_station_settings2(
+            station=station, mood_energy="all", diversity="discover", language="any"
+        )
+    except Exception:  # noqa: BLE001 - настройки необязательны
+        pass
+    try:
+        result = client.rotor_station_tracks(station=station)
+    except Exception:  # noqa: BLE001 - станция недоступна, обходимся похожими
+        result = None
+    if result and result.sequence:
+        candidates.extend(seq.track for seq in result.sequence if seq.track)
+
+    return candidates
+
+
 def analyze_taste(token: str) -> str:
     """Определяет любимые жанры пользователя и число известных исполнителей."""
     try:
@@ -122,12 +166,20 @@ def analyze_taste(token: str) -> str:
 
 
 def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist: int) -> str:
-    """Подбирает новые треки в заданных жанрах, избегая уже известных исполнителей."""
+    """Подбирает новые треки в заданных жанрах, избегая уже известных исполнителей.
+
+    Кандидаты берутся в первую очередь через client.tracks_similar() от уже
+    лайкнутых треков этого жанра — это персональный сигнал "похоже на то,
+    что тебе уже нравится" от самого Яндекса, а не общий жанровый список.
+    Жанровая радиостанция (с настройкой diversity=discover) идёт вторым
+    источником и просто добирает треки, если похожих не хватило.
+    """
     try:
         client = Client(token).init()
         liked = _get_liked_full_tracks(client)
         seen_track_ids = {t.id for t in liked}
         known_artist_ids = _known_artist_ids(client, liked)
+        liked_by_genre = _liked_tracks_by_genre(liked)
 
         genre_ids = json.loads(genre_ids_json)
         picked = []
@@ -135,16 +187,10 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
         per_genre_found = {}
 
         for genre_id in genre_ids:
-            station = f"genre:{genre_id}"
             found = 0
-            try:
-                result = client.rotor_station_tracks(station=station)
-            except Exception:  # noqa: BLE001 - станция недоступна, пропускаем жанр
-                per_genre_found[genre_id] = 0
-                continue
+            candidates = _candidate_tracks_for_genre(client, genre_id, liked_by_genre.get(genre_id, []))
 
-            for seq in result.sequence if result else []:
-                track = seq.track
+            for track in candidates:
                 if not track or track.id in seen_track_ids or not track.albums:
                     continue
                 if _is_variant_track(track):

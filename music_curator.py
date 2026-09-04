@@ -5,8 +5,10 @@
 Логика:
   1. Берёт лайкнутые треки и артистов -> определяет любимые жанры
      и "уже известных" исполнителей (их избегаем).
-  2. Для каждого любимого жанра запрашивает жанровую радиостанцию Яндекса
-     (genre:<id>) — там много разных исполнителей одного жанра.
+  2. Для каждого жанра сперва ищет треки, похожие на уже лайкнутые в этом
+     жанре (client.tracks_similar — персональный сигнал похожести от самого
+     Яндекса), и добирает недостающее через жанровую радиостанцию
+     (genre:<id>, с настройкой diversity=discover) как второй источник.
   3. Отбрасывает треки уже известных/дизлайкнутых исполнителей и дубликаты,
      ограничивает число треков на одного нового исполнителя (для разнообразия).
   4. Печатает результат и (если не --dry-run) создаёт приватный плейлист
@@ -131,9 +133,54 @@ def analyze_taste(client: Client, liked_full_tracks: list):
     return genre_counts, known_artist_ids
 
 
+def liked_tracks_by_genre(liked_full_tracks: list) -> dict[str, list]:
+    by_genre: dict[str, list] = {}
+    for track in liked_full_tracks:
+        genre = track_genre(track)
+        if genre:
+            by_genre.setdefault(genre, []).append(track)
+    return by_genre
+
+
+SIMILAR_SEED_LIMIT = 5
+
+
+def candidate_tracks_for_genre(client: Client, genre_id: str, seed_tracks: list) -> list:
+    """Кандидаты для жанра из двух источников: сперва похожие на уже
+    лайкнутые треки этого жанра (точный сигнал от рекомендательной системы
+    Яндекса), затем жанровая радиостанция с упором на новое как добор."""
+    candidates = []
+
+    for seed in seed_tracks[:SIMILAR_SEED_LIMIT]:
+        try:
+            similar = client.tracks_similar(seed.id)
+        except Exception:  # noqa: BLE001 - трек без похожих, пропускаем
+            continue
+        if similar and similar.similar_tracks:
+            candidates.extend(similar.similar_tracks)
+
+    station = f"genre:{genre_id}"
+    try:
+        client.rotor_station_settings2(
+            station=station, mood_energy="all", diversity="discover", language="any"
+        )
+    except Exception:  # noqa: BLE001 - настройки необязательны
+        pass
+    try:
+        result = client.rotor_station_tracks(station=station)
+    except Exception as exc:  # noqa: BLE001 - обходимся похожими треками
+        print(f"  [{genre_id}] станция недоступна: {exc}")
+        result = None
+    if result and result.sequence:
+        candidates.extend(seq.track for seq in result.sequence if seq.track)
+
+    return candidates
+
+
 def pick_new_tracks(
     client: Client,
     genre_ids: list[str],
+    liked_by_genre: dict[str, list],
     known_artist_ids: set[int],
     already_seen_track_ids: set[int],
     per_genre: int,
@@ -144,16 +191,10 @@ def pick_new_tracks(
     artist_use_count: Counter[int] = Counter()
 
     for genre_id in genre_ids:
-        station = f"genre:{genre_id}"
-        try:
-            result = client.rotor_station_tracks(station=station)
-        except Exception as exc:  # noqa: BLE001 - просто пропускаем недоступную станцию
-            print(f"  [{genre_id}] станция недоступна: {exc}")
-            continue
+        candidates = candidate_tracks_for_genre(client, genre_id, liked_by_genre.get(genre_id, []))
 
         found = 0
-        for seq in (result.sequence if result else []):
-            track = seq.track
+        for track in candidates:
             if not track or track.id in seen_track_ids:
                 continue
             if is_variant_track(track):
@@ -246,6 +287,7 @@ def main():
     picked = pick_new_tracks(
         client,
         target_genres,
+        liked_tracks_by_genre(liked_full),
         known_artist_ids,
         liked_track_ids,
         args.per_genre,
