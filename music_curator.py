@@ -19,6 +19,7 @@
   python music_curator.py --dry-run              # только показать список
   python music_curator.py --genres rock indie    # свои жанры (id из client.genres())
   python music_curator.py --list-genres          # показать доступные id жанров
+  python music_curator.py --cheer-up             # весёлый плейлист "Маргарите, чтоб не грустила"
 """
 from __future__ import annotations
 
@@ -36,6 +37,9 @@ except Exception:
 from yandex_music import Client
 
 TOKEN_FILE = Path(__file__).parent / "token.txt"
+CHEERFUL_PLAYLIST_NAME = "Маргарите, чтоб не грустила"
+CHEERFUL_TRACK_COUNT = 20
+CHEERFUL_MAX_PER_ARTIST = 3
 
 
 def load_token() -> str:
@@ -220,6 +224,56 @@ def pick_new_tracks(
     return picked
 
 
+def pick_cheerful_tracks(
+    client: Client, already_seen_track_ids: set[int], count: int, max_per_artist: int
+) -> list:
+    """Весёлая музыка с личной волны пользователя (mood_energy=fun).
+
+    В отличие от pick_new_tracks, здесь НЕ исключаются уже известные
+    исполнители — для настроения важнее узнаваемые бодрые любимые треки,
+    а не новизна. Ремиксы/кавера/лайвы всё равно отфильтровываются, и
+    дубли уже лайкнутых треков не повторяются.
+    """
+    seen_track_ids = set(already_seen_track_ids)
+
+    station = "user:onyourwave"
+    try:
+        client.rotor_station_settings2(
+            station=station, mood_energy="fun", diversity="popular", language="any"
+        )
+    except Exception:  # noqa: BLE001 - настройки необязательны
+        pass
+
+    try:
+        result = client.rotor_station_tracks(station=station)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Волна недоступна: {exc}")
+        return []
+
+    picked = []
+    artist_use_count: Counter[int] = Counter()
+    for seq in result.sequence if result else []:
+        track = seq.track
+        if not track or track.id in seen_track_ids or not track.albums:
+            continue
+        if is_variant_track(track):
+            continue
+
+        artist_ids = {a.id for a in (track.artists or [])}
+        if any(artist_use_count[a] >= max_per_artist for a in artist_ids):
+            continue
+
+        picked.append(track)
+        seen_track_ids.add(track.id)
+        for a in artist_ids:
+            artist_use_count[a] += 1
+
+        if len(picked) >= count:
+            break
+
+    return picked
+
+
 def create_playlist(client: Client, title: str, tracks: list) -> str:
     playlist = client.users_playlists_create(title, visibility="private")
     revision = playlist.revision or 1
@@ -250,6 +304,11 @@ def parse_args():
     parser.add_argument("--playlist-name", default="Новые исполнители", help="название плейлиста")
     parser.add_argument("--dry-run", action="store_true", help="только показать список, не создавать плейлист")
     parser.add_argument("--list-genres", action="store_true", help="показать доступные id жанров и выйти")
+    parser.add_argument(
+        "--cheer-up",
+        action="store_true",
+        help='весёлый плейлист "Маргарите, чтоб не грустила" вместо обычного подбора по жанрам',
+    )
     return parser.parse_args()
 
 
@@ -266,6 +325,27 @@ def main():
     print("Читаю лайки...")
     liked_full = get_liked_full_tracks(client)
     liked_track_ids = {t.id for t in liked_full}
+
+    if args.cheer_up:
+        print("Ищу весёлую музыку для Маргариты...")
+        picked = pick_cheerful_tracks(client, liked_track_ids, CHEERFUL_TRACK_COUNT, CHEERFUL_MAX_PER_ARTIST)
+        if not picked:
+            sys.exit("Не нашлось подходящих треков для весёлого плейлиста.")
+
+        print(f"\nВсего отобрано {len(picked)} треков:")
+        for track in picked:
+            artists = ", ".join(a.name for a in track.artists or [])
+            print(f"  - {artists} — {track.title}")
+
+        if args.dry_run:
+            print("\n(--dry-run: плейлист не создавался)")
+            return
+
+        title = args.playlist_name if args.playlist_name != "Новые исполнители" else CHEERFUL_PLAYLIST_NAME
+        print(f"\nСоздаю плейлист «{title}»...")
+        url = create_playlist(client, title, picked)
+        print(f"Готово: {url}")
+        return
 
     genre_counts, known_artist_ids = analyze_taste(client, liked_full)
 

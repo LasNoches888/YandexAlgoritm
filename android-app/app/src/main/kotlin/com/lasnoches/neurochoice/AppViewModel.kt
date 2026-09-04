@@ -23,6 +23,9 @@ sealed interface Screen {
 }
 
 private const val DEFAULT_PLAYLIST_NAME = "Выбор нейронки"
+private const val CHEERFUL_PLAYLIST_NAME = "Маргарите, чтоб не грустила"
+private const val CHEERFUL_TRACK_COUNT = 20
+private const val CHEERFUL_MAX_PER_ARTIST = 3
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -106,15 +109,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            screen = Screen.Working("Создаю плейлист «$playlistName»...")
-            val created = PythonBridge.createPlaylist(appContext, currentToken, playlistName, picked.tracks)
-            if (!created.ok) {
-                screen = Screen.ErrorScreen(created.error ?: "Не удалось создать плейлист")
+            createPlaylistAndShowResult(currentToken, playlistName, picked.tracks)
+        }
+    }
+
+    fun startCheerfulPlaylist() {
+        val currentToken = token ?: return
+
+        viewModelScope.launch {
+            screen = Screen.Working("Ищу весёлую музыку для Маргариты...")
+            val picked = PythonBridge.pickCheerfulTracks(
+                appContext,
+                currentToken,
+                CHEERFUL_TRACK_COUNT,
+                CHEERFUL_MAX_PER_ARTIST,
+            )
+            if (!picked.ok) {
+                screen = Screen.ErrorScreen(picked.error ?: "Не удалось подобрать весёлую музыку")
+                return@launch
+            }
+            if (picked.tracks.isEmpty()) {
+                screen = Screen.ErrorScreen("Не нашлось подходящих треков для весёлого плейлиста.")
                 return@launch
             }
 
-            screen = Screen.Result(created.url, created.trackCount, picked.tracks)
+            createPlaylistAndShowResult(currentToken, CHEERFUL_PLAYLIST_NAME, picked.tracks)
         }
+    }
+
+    private suspend fun createPlaylistAndShowResult(currentToken: String, title: String, tracks: List<TrackInfo>) {
+        screen = Screen.Working("Создаю плейлист «$title»...")
+        val created = PythonBridge.createPlaylist(appContext, currentToken, title, tracks)
+        if (!created.ok) {
+            screen = Screen.ErrorScreen(created.error ?: "Не удалось создать плейлист")
+            return
+        }
+        screen = Screen.Result(created.url, created.trackCount, tracks)
     }
 
     fun backToHome() {

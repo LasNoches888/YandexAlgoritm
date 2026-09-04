@@ -49,6 +49,18 @@ object PythonBridge {
         json.decodeFromString(raw)
     }
 
+    suspend fun pickCheerfulTracks(
+        context: Context,
+        token: String,
+        count: Int,
+        maxPerArtist: Int,
+    ): PickResult = withContext(Dispatchers.IO) {
+        val raw = module(context)
+            .callAttr("pick_cheerful_tracks", token, count, maxPerArtist)
+            .toString()
+        json.decodeFromString(raw)
+    }
+
     suspend fun createPlaylist(
         context: Context,
         token: String,

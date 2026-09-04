@@ -228,6 +228,68 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
+def pick_cheerful_tracks(token: str, count: int, max_per_artist: int) -> str:
+    """Весёлая музыка с личной волны пользователя (mood_energy=fun).
+
+    В отличие от pick_tracks, здесь НЕ исключаются уже известные
+    исполнители — для настроения важнее узнаваемые бодрые любимые треки,
+    а не новизна. Ремиксы/кавера/лайвы всё равно отфильтровываются, и
+    дубли уже лайкнутых треков не повторяются.
+    """
+    try:
+        client = Client(token).init()
+        liked = _get_liked_full_tracks(client)
+        seen_track_ids = {t.id for t in liked}
+
+        station = "user:onyourwave"
+        try:
+            client.rotor_station_settings2(
+                station=station, mood_energy="fun", diversity="popular", language="any"
+            )
+        except Exception:  # noqa: BLE001 - настройки необязательны
+            pass
+
+        try:
+            result = client.rotor_station_tracks(station=station)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"ok": False, "error": str(exc)})
+
+        picked = []
+        artist_use_count = Counter()
+        for seq in result.sequence if result else []:
+            track = seq.track
+            if not track or track.id in seen_track_ids or not track.albums:
+                continue
+            if _is_variant_track(track):
+                continue
+
+            artist_ids = {a.id for a in (track.artists or [])}
+            if any(artist_use_count[a] >= max_per_artist for a in artist_ids):
+                continue
+
+            picked.append(track)
+            seen_track_ids.add(track.id)
+            for a in artist_ids:
+                artist_use_count[a] += 1
+
+            if len(picked) >= count:
+                break
+
+        tracks = [
+            {
+                "id": str(track.id),
+                "albumId": str(track.albums[0].id),
+                "title": track.title,
+                "artists": [a.name for a in (track.artists or [])],
+            }
+            for track in picked
+        ]
+
+        return json.dumps({"ok": True, "tracks": tracks})
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)})
+
+
 def create_playlist(token: str, title: str, tracks_json: str) -> str:
     """Создаёт приватный плейлист и наполняет его переданными треками."""
     try:

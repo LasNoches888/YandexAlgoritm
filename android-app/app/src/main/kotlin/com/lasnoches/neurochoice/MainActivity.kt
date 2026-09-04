@@ -29,13 +29,16 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -237,6 +240,21 @@ private fun HomeScreen(vm: AppViewModel, taste: TasteResult) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Подобрать треки")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Button(
+            onClick = { vm.startCheerfulPlaylist() },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary,
+                contentColor = MaterialTheme.colorScheme.onSecondary,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Filled.Favorite, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Маргарите, чтоб не грустила")
         }
     }
 }
