@@ -100,6 +100,16 @@ def _known_artist_ids(client, liked_tracks):
     return known
 
 
+def _disliked_track_ids(client):
+    """Треки, явно дизлайкнутые в Яндекс.Музыке — их не должно быть в выдаче
+    станций, но проверяем сами: рекомендательные станции об этом не всегда
+    знают."""
+    disliked = client.users_dislikes_tracks()
+    if not disliked or not disliked.tracks:
+        return set()
+    return {str(t.track_id) for t in disliked.tracks}
+
+
 def _liked_tracks_by_genre(liked_tracks):
     by_genre = {}
     for track in liked_tracks:
@@ -112,13 +122,33 @@ def _liked_tracks_by_genre(liked_tracks):
 _SIMILAR_SEED_LIMIT = 5
 
 
+def _diverse_seeds(tracks, limit):
+    """До `limit` треков, по возможности от разных исполнителей — иначе если
+    в жанре сильно преобладает один любимый артист, все сиды для
+    tracks_similar() были бы от него одного и кандидаты вышли бы однобокими."""
+    by_artist_first = []
+    rest = []
+    seen_artist_keys = set()
+
+    for track in tracks:
+        artist_key = tuple(sorted(a.id for a in (track.artists or [])))
+        if artist_key and artist_key not in seen_artist_keys:
+            seen_artist_keys.add(artist_key)
+            by_artist_first.append(track)
+        else:
+            rest.append(track)
+
+    combined = by_artist_first + rest
+    return combined[:limit]
+
+
 def _candidate_tracks_for_genre(client, genre_id, seed_tracks):
     """Кандидаты для жанра из двух источников: сперва похожие на уже
     лайкнутые треки этого жанра (точный сигнал от рекомендательной системы
     Яндекса), затем жанровая радиостанция с упором на новое как добор."""
     candidates = []
 
-    for seed in seed_tracks[:_SIMILAR_SEED_LIMIT]:
+    for seed in _diverse_seeds(seed_tracks, _SIMILAR_SEED_LIMIT):
         try:
             similar = client.tracks_similar(seed.id)
         except Exception:  # noqa: BLE001 - трек без похожих, пропускаем
@@ -175,7 +205,9 @@ def analyze_taste(token: str) -> str:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
-def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist: int) -> str:
+def pick_tracks(
+    token: str, genre_ids_json: str, per_genre: int, max_per_artist: int, exclude_track_ids_json: str = "[]"
+) -> str:
     """Подбирает новые треки в заданных жанрах, избегая уже известных исполнителей.
 
     Кандидаты берутся в первую очередь через client.tracks_similar() от уже
@@ -183,11 +215,17 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
     что тебе уже нравится" от самого Яндекса, а не общий жанровый список.
     Жанровая радиостанция (с настройкой diversity=discover) идёт вторым
     источником и просто добирает треки, если похожих не хватило.
+
+    exclude_track_ids_json — треки, которые пользователь раньше снял с
+    галочки в предпросмотре на телефоне (Kotlin присылает их сюда), чтобы
+    больше не подсовывать их снова.
     """
     try:
         client = Client(token).init()
         liked = _get_liked_full_tracks(client)
-        seen_track_ids = {t.id for t in liked}
+        seen_track_ids = {str(t.id) for t in liked}
+        seen_track_ids |= _disliked_track_ids(client)
+        seen_track_ids |= {str(tid) for tid in json.loads(exclude_track_ids_json)}
         known_artist_ids = _known_artist_ids(client, liked)
         liked_by_genre = _liked_tracks_by_genre(liked)
 
@@ -201,7 +239,7 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
             candidates = _candidate_tracks_for_genre(client, genre_id, liked_by_genre.get(genre_id, []))
 
             for track in candidates:
-                if not track or track.id in seen_track_ids or not track.albums:
+                if not track or str(track.id) in seen_track_ids or not track.albums:
                     continue
                 if _is_variant_track(track):
                     continue
@@ -213,7 +251,7 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
                     continue
 
                 picked.append(track)
-                seen_track_ids.add(track.id)
+                seen_track_ids.add(str(track.id))
                 for a in artist_ids:
                     artist_use_count[a] += 1
 
@@ -230,18 +268,20 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
         return json.dumps({"ok": False, "error": str(exc)})
 
 
-def pick_cheerful_tracks(token: str, count: int, max_per_artist: int) -> str:
+def pick_cheerful_tracks(token: str, count: int, max_per_artist: int, exclude_track_ids_json: str = "[]") -> str:
     """Весёлая музыка с личной волны пользователя (mood_energy=fun).
 
     В отличие от pick_tracks, здесь НЕ исключаются уже известные
     исполнители — для настроения важнее узнаваемые бодрые любимые треки,
     а не новизна. Ремиксы/кавера/лайвы всё равно отфильтровываются, и
-    дубли уже лайкнутых треков не повторяются.
+    дубли уже лайкнутых/дизлайкнутых/ранее отклонённых треков не повторяются.
     """
     try:
         client = Client(token).init()
         liked = _get_liked_full_tracks(client)
-        seen_track_ids = {t.id for t in liked}
+        seen_track_ids = {str(t.id) for t in liked}
+        seen_track_ids |= _disliked_track_ids(client)
+        seen_track_ids |= {str(tid) for tid in json.loads(exclude_track_ids_json)}
 
         station = "user:onyourwave"
         try:
@@ -260,7 +300,7 @@ def pick_cheerful_tracks(token: str, count: int, max_per_artist: int) -> str:
         artist_use_count = Counter()
         for seq in result.sequence if result else []:
             track = seq.track
-            if not track or track.id in seen_track_ids or not track.albums:
+            if not track or str(track.id) in seen_track_ids or not track.albums:
                 continue
             if _is_variant_track(track):
                 continue
@@ -270,7 +310,7 @@ def pick_cheerful_tracks(token: str, count: int, max_per_artist: int) -> str:
                 continue
 
             picked.append(track)
-            seen_track_ids.add(track.id)
+            seen_track_ids.add(str(track.id))
             for a in artist_ids:
                 artist_use_count[a] += 1
 

@@ -41,10 +41,12 @@ object PythonBridge {
         genreIds: List<String>,
         perGenre: Int,
         maxPerArtist: Int,
+        excludeTrackIds: Set<String>,
     ): PickResult = withContext(Dispatchers.IO) {
         val genreIdsJson = json.encodeToString(genreIds)
+        val excludeJson = json.encodeToString(excludeTrackIds.toList())
         val raw = module(context)
-            .callAttr("pick_tracks", token, genreIdsJson, perGenre, maxPerArtist)
+            .callAttr("pick_tracks", token, genreIdsJson, perGenre, maxPerArtist, excludeJson)
             .toString()
         json.decodeFromString(raw)
     }
@@ -54,9 +56,11 @@ object PythonBridge {
         token: String,
         count: Int,
         maxPerArtist: Int,
+        excludeTrackIds: Set<String>,
     ): PickResult = withContext(Dispatchers.IO) {
+        val excludeJson = json.encodeToString(excludeTrackIds.toList())
         val raw = module(context)
-            .callAttr("pick_cheerful_tracks", token, count, maxPerArtist)
+            .callAttr("pick_cheerful_tracks", token, count, maxPerArtist, excludeJson)
             .toString()
         json.decodeFromString(raw)
     }

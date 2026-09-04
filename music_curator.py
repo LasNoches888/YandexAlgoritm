@@ -116,6 +116,16 @@ def is_variant_track(track) -> bool:
     return any(keyword in haystack for keyword in _VARIANT_KEYWORDS)
 
 
+def disliked_track_ids(client: Client) -> set:
+    """Треки, явно дизлайкнутые в Яндекс.Музыке — их не должно быть в выдаче
+    станций, но проверяем сами: рекомендательные станции об этом не всегда
+    знают."""
+    disliked = client.users_dislikes_tracks()
+    if not disliked or not disliked.tracks:
+        return set()
+    return {t.track_id for t in disliked.tracks}
+
+
 def analyze_taste(client: Client, liked_full_tracks: list):
     genre_counts: Counter[str] = Counter()
     known_artist_ids: set[int] = set()
@@ -149,13 +159,32 @@ def liked_tracks_by_genre(liked_full_tracks: list) -> dict[str, list]:
 SIMILAR_SEED_LIMIT = 5
 
 
+def diverse_seeds(tracks: list, limit: int) -> list:
+    """До `limit` треков, по возможности от разных исполнителей — иначе если
+    в жанре сильно преобладает один любимый артист, все сиды для
+    tracks_similar() были бы от него одного и кандидаты вышли бы однобокими."""
+    by_artist_first = []
+    rest = []
+    seen_artist_keys = set()
+
+    for track in tracks:
+        artist_key = tuple(sorted(a.id for a in (track.artists or [])))
+        if artist_key and artist_key not in seen_artist_keys:
+            seen_artist_keys.add(artist_key)
+            by_artist_first.append(track)
+        else:
+            rest.append(track)
+
+    return (by_artist_first + rest)[:limit]
+
+
 def candidate_tracks_for_genre(client: Client, genre_id: str, seed_tracks: list) -> list:
     """Кандидаты для жанра из двух источников: сперва похожие на уже
     лайкнутые треки этого жанра (точный сигнал от рекомендательной системы
     Яндекса), затем жанровая радиостанция с упором на новое как добор."""
     candidates = []
 
-    for seed in seed_tracks[:SIMILAR_SEED_LIMIT]:
+    for seed in diverse_seeds(seed_tracks, SIMILAR_SEED_LIMIT):
         try:
             similar = client.tracks_similar(seed.id)
         except Exception:  # noqa: BLE001 - трек без похожих, пропускаем
@@ -324,11 +353,11 @@ def main():
 
     print("Читаю лайки...")
     liked_full = get_liked_full_tracks(client)
-    liked_track_ids = {t.id for t in liked_full}
+    excluded_track_ids = {t.id for t in liked_full} | disliked_track_ids(client)
 
     if args.cheer_up:
         print("Ищу весёлую музыку для Маргариты...")
-        picked = pick_cheerful_tracks(client, liked_track_ids, CHEERFUL_TRACK_COUNT, CHEERFUL_MAX_PER_ARTIST)
+        picked = pick_cheerful_tracks(client, excluded_track_ids, CHEERFUL_TRACK_COUNT, CHEERFUL_MAX_PER_ARTIST)
         if not picked:
             sys.exit("Не нашлось подходящих треков для весёлого плейлиста.")
 
@@ -369,7 +398,7 @@ def main():
         target_genres,
         liked_tracks_by_genre(liked_full),
         known_artist_ids,
-        liked_track_ids,
+        excluded_track_ids,
         args.per_genre,
         args.max_per_artist,
     )

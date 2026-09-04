@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lasnoches.neurochoice.data.PythonBridge
+import com.lasnoches.neurochoice.data.RejectionStore
 import com.lasnoches.neurochoice.data.TasteResult
 import com.lasnoches.neurochoice.data.TokenStore
 import com.lasnoches.neurochoice.data.TrackInfo
@@ -31,6 +32,7 @@ private const val CHEERFUL_MAX_PER_ARTIST = 3
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val tokenStore = TokenStore(app)
+    private val rejectionStore = RejectionStore(app)
     private val appContext = app.applicationContext
 
     var token by mutableStateOf(tokenStore.getToken())
@@ -102,6 +104,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 selectedGenreIds.toList(),
                 perGenre,
                 maxPerArtist,
+                rejectionStore.getRejectedIds(),
             )
             if (!picked.ok) {
                 screen = Screen.ErrorScreen(picked.error ?: "Не удалось подобрать треки")
@@ -129,6 +132,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 currentToken,
                 CHEERFUL_TRACK_COUNT,
                 CHEERFUL_MAX_PER_ARTIST,
+                rejectionStore.getRejectedIds(),
             )
             if (!picked.ok) {
                 screen = Screen.ErrorScreen(picked.error ?: "Не удалось подобрать весёлую музыку")
@@ -158,6 +162,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val currentToken = token ?: return
         val chosen = pendingTracks.filter { it.id in selectedTrackIds }
         if (chosen.isEmpty()) return
+
+        val rejected = pendingTracks.filterNot { it.id in selectedTrackIds }.map { it.id }
+        rejectionStore.addRejected(rejected)
 
         viewModelScope.launch {
             createPlaylistAndShowResult(currentToken, pendingTitle, chosen)
