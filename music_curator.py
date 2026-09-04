@@ -73,6 +73,43 @@ def track_genre(track) -> str | None:
     return None
 
 
+_VARIANT_KEYWORDS = (
+    "remix",
+    "rmx",
+    "mashup",
+    "bootleg",
+    "cover",
+    "tribute",
+    "karaoke",
+    "acapella",
+    "a cappella",
+    "instrumental",
+    "nightcore",
+    "sped up",
+    "speed up",
+    "slowed",
+    "8d audio",
+    "extended mix",
+    "vip mix",
+    "dub mix",
+    "club mix",
+    "night mix",
+    "acoustic",
+    "live",
+    "unplugged",
+    "radio edit",
+    "chipmunk",
+    "reversed",
+    "dj edit",
+)
+
+
+def is_variant_track(track) -> bool:
+    """True для ремиксов/каверов/лайвов и похожих "не оригинальных" версий."""
+    haystack = f"{getattr(track, 'version', '') or ''} {track.title or ''}".lower()
+    return any(keyword in haystack for keyword in _VARIANT_KEYWORDS)
+
+
 def analyze_taste(client: Client, liked_full_tracks: list):
     genre_counts: Counter[str] = Counter()
     known_artist_ids: set[int] = set()
@@ -118,6 +155,8 @@ def pick_new_tracks(
         for seq in (result.sequence if result else []):
             track = seq.track
             if not track or track.id in seen_track_ids:
+                continue
+            if is_variant_track(track):
                 continue
 
             artist_ids = {a.id for a in (track.artists or [])}

@@ -39,6 +39,43 @@ def _track_genre(track):
     return None
 
 
+_VARIANT_KEYWORDS = (
+    "remix",
+    "rmx",
+    "mashup",
+    "bootleg",
+    "cover",
+    "tribute",
+    "karaoke",
+    "acapella",
+    "a cappella",
+    "instrumental",
+    "nightcore",
+    "sped up",
+    "speed up",
+    "slowed",
+    "8d audio",
+    "extended mix",
+    "vip mix",
+    "dub mix",
+    "club mix",
+    "night mix",
+    "acoustic",
+    "live",
+    "unplugged",
+    "radio edit",
+    "chipmunk",
+    "reversed",
+    "dj edit",
+)
+
+
+def _is_variant_track(track):
+    """True для ремиксов/каверов/лайвов и похожих "не оригинальных" версий."""
+    haystack = f"{getattr(track, 'version', '') or ''} {track.title or ''}".lower()
+    return any(keyword in haystack for keyword in _VARIANT_KEYWORDS)
+
+
 def _known_artist_ids(client, liked_tracks):
     known = set()
     for track in liked_tracks:
@@ -109,6 +146,8 @@ def pick_tracks(token: str, genre_ids_json: str, per_genre: int, max_per_artist:
             for seq in result.sequence if result else []:
                 track = seq.track
                 if not track or track.id in seen_track_ids or not track.albums:
+                    continue
+                if _is_variant_track(track):
                     continue
 
                 artist_ids = {a.id for a in (track.artists or [])}
