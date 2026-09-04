@@ -253,17 +253,58 @@ def pick_new_tracks(
     return picked
 
 
+KIDS_JOKE_QUERIES = (
+    "Синий трактор",
+    "Чунга-чанга",
+    "Кукутики",
+    "Три кота",
+    "Маша и Медведь",
+)
+KIDS_JOKE_LIMIT = 5
+
+
+def kids_joke_tracks(client: Client, seen_track_ids: set, limit: int) -> list:
+    """Специально подмешивает детские хиты ради прикола — ищет по названию
+    напрямую, а не через жанр/настроение, иначе "Синий трактор" в личную
+    волну взрослого аккаунта никогда бы не попал. По одному лучшему
+    совпадению на запрос."""
+    picked = []
+    for query in KIDS_JOKE_QUERIES:
+        if len(picked) >= limit:
+            break
+        try:
+            result = client.search(query, type_="track")
+        except Exception:  # noqa: BLE001
+            continue
+        results = result.tracks.results if result and result.tracks else []
+        for track in results:
+            if not track or track.id in seen_track_ids or not track.albums:
+                continue
+            picked.append(track)
+            seen_track_ids.add(track.id)
+            break
+
+    return picked
+
+
 def pick_cheerful_tracks(
     client: Client, already_seen_track_ids: set[int], count: int, max_per_artist: int
 ) -> list:
-    """Весёлая музыка с личной волны пользователя (mood_energy=fun).
+    """Весёлая музыка с личной волны пользователя (mood_energy=fun) плюс
+    несколько детских хитов для прикола (см. kids_joke_tracks).
 
     В отличие от pick_new_tracks, здесь НЕ исключаются уже известные
     исполнители — для настроения важнее узнаваемые бодрые любимые треки,
-    а не новизна. Ремиксы/кавера/лайвы всё равно отфильтровываются, и
-    дубли уже лайкнутых треков не повторяются.
+    а не новизна. Ремиксы/кавера/лайвы (кроме нарочно подмешанных детских)
+    отфильтровываются, дубли уже лайкнутых треков не повторяются.
     """
     seen_track_ids = set(already_seen_track_ids)
+
+    picked = list(kids_joke_tracks(client, seen_track_ids, KIDS_JOKE_LIMIT))
+    artist_use_count: Counter[int] = Counter()
+    for track in picked:
+        for a in track.artists or []:
+            artist_use_count[a.id] += 1
 
     station = "user:onyourwave"
     try:
@@ -275,12 +316,10 @@ def pick_cheerful_tracks(
 
     try:
         result = client.rotor_station_tracks(station=station)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - обходимся хотя бы детскими хитами
         print(f"Волна недоступна: {exc}")
-        return []
+        result = None
 
-    picked = []
-    artist_use_count: Counter[int] = Counter()
     for seq in result.sequence if result else []:
         track = seq.track
         if not track or track.id in seen_track_ids or not track.albums:

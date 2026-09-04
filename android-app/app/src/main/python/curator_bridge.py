@@ -268,13 +268,49 @@ def pick_tracks(
         return json.dumps({"ok": False, "error": str(exc)})
 
 
+_KIDS_JOKE_QUERIES = (
+    "Синий трактор",
+    "Чунга-чанга",
+    "Кукутики",
+    "Три кота",
+    "Маша и Медведь",
+)
+_KIDS_JOKE_LIMIT = 5
+
+
+def _kids_joke_tracks(client, seen_track_ids, limit):
+    """Специально подмешивает детские хиты ради прикола (по просьбе
+    пользователя) — ищет по названию напрямую, а не через жанр/настроение,
+    иначе "Синий трактор" в личную волну взрослого аккаунта никогда бы не
+    попал. По одному лучшему совпадению на запрос."""
+    picked = []
+    for query in _KIDS_JOKE_QUERIES:
+        if len(picked) >= limit:
+            break
+        try:
+            result = client.search(query, type_="track")
+        except Exception:  # noqa: BLE001
+            continue
+        results = result.tracks.results if result and result.tracks else []
+        for track in results:
+            if not track or str(track.id) in seen_track_ids or not track.albums:
+                continue
+            picked.append(track)
+            seen_track_ids.add(str(track.id))
+            break
+
+    return picked
+
+
 def pick_cheerful_tracks(token: str, count: int, max_per_artist: int, exclude_track_ids_json: str = "[]") -> str:
-    """Весёлая музыка с личной волны пользователя (mood_energy=fun).
+    """Весёлая музыка с личной волны пользователя (mood_energy=fun) плюс
+    несколько детских хитов для прикола (см. _kids_joke_tracks).
 
     В отличие от pick_tracks, здесь НЕ исключаются уже известные
     исполнители — для настроения важнее узнаваемые бодрые любимые треки,
-    а не новизна. Ремиксы/кавера/лайвы всё равно отфильтровываются, и
-    дубли уже лайкнутых/дизлайкнутых/ранее отклонённых треков не повторяются.
+    а не новизна. Ремиксы/кавера/лайвы (кроме нарочно подмешанных детских)
+    отфильтровываются, дубли уже лайкнутых/дизлайкнутых/ранее отклонённых
+    треков не повторяются.
     """
     try:
         client = Client(token).init()
@@ -282,6 +318,12 @@ def pick_cheerful_tracks(token: str, count: int, max_per_artist: int, exclude_tr
         seen_track_ids = {str(t.id) for t in liked}
         seen_track_ids |= _disliked_track_ids(client)
         seen_track_ids |= {str(tid) for tid in json.loads(exclude_track_ids_json)}
+
+        picked = list(_kids_joke_tracks(client, seen_track_ids, _KIDS_JOKE_LIMIT))
+        artist_use_count = Counter()
+        for track in picked:
+            for a in track.artists or []:
+                artist_use_count[a.id] += 1
 
         station = "user:onyourwave"
         try:
@@ -293,11 +335,9 @@ def pick_cheerful_tracks(token: str, count: int, max_per_artist: int, exclude_tr
 
         try:
             result = client.rotor_station_tracks(station=station)
-        except Exception as exc:  # noqa: BLE001
-            return json.dumps({"ok": False, "error": str(exc)})
+        except Exception:  # noqa: BLE001 - обходимся хотя бы детскими хитами, если они нашлись
+            result = None
 
-        picked = []
-        artist_use_count = Counter()
         for seq in result.sequence if result else []:
             track = seq.track
             if not track or str(track.id) in seen_track_ids or not track.albums:
